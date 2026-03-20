@@ -1,0 +1,239 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ✅ Format yang benar — tiap nilai di baris sendiri
+enum Role {
+  USER
+  ADMIN
+  SUPERADMIN
+}
+
+enum SubscriptionTier {
+  FREE
+  BASIC
+  PRO
+  LIFETIME
+}
+
+enum JlptLevel {
+  N5
+  N4
+  N3
+  N2
+  N1
+  JFT
+}
+
+enum LessonType {
+  HIRAGANA
+  KATAKANA
+  VOCABULARY
+  KANJI
+  GRAMMAR
+  READING
+  LISTENING
+}
+
+enum ProgressStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum SrsItemType {
+  VOCABULARY
+  KANJI
+  GRAMMAR
+}
+
+model User {
+  id               String           @id @default(uuid())
+  email            String           @unique
+  name             String
+  avatarUrl        String?
+  passwordHash     String?
+  googleId         String?          @unique
+  role             Role             @default(USER)
+  currentLevel     JlptLevel        @default(N5)
+  targetExam       JlptLevel        @default(N4)
+  targetExamDate   DateTime?
+  streakCount      Int              @default(0)
+  xpTotal          Int              @default(0)
+  lastActivityAt   DateTime?
+  subscriptionTier SubscriptionTier @default(FREE)
+  emailVerified    Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  sessions         Session[]
+  subscriptions    Subscription[]
+  placementTests   PlacementTest[]
+  studyPlan        StudyPlan?
+  progress         UserProgress[]
+  srsCards         SrsCard[]
+
+  @@index([email])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  refreshToken String   @unique
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@index([refreshToken])
+}
+
+model Subscription {
+  id        String           @id @default(uuid())
+  userId    String
+  tier      SubscriptionTier
+  paymentId String?
+  startDate DateTime         @default(now())
+  endDate   DateTime?
+  isActive  Boolean          @default(true)
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+
+model PlacementTest {
+  id          String    @id @default(uuid())
+  userId      String
+  questions   Json
+  answers     Json
+  score       Int
+  resultLevel JlptLevel
+  completedAt DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+
+model StudyPlan {
+  id           String    @id @default(uuid())
+  userId       String    @unique
+  targetExam   JlptLevel
+  targetDate   DateTime
+  dailyMinutes Int       @default(30)
+  weeklyPlan   Json
+  generatedAt  DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Vocabulary {
+  id           String    @id @default(uuid())
+  word         String
+  reading      String
+  meaning      String
+  partOfSpeech String
+  jlptLevel    JlptLevel
+  audioUrl     String?
+  exampleJp    String?
+  exampleId    String?
+  tags         String[]
+  createdAt    DateTime  @default(now())
+  srsCards     SrsCard[]
+  @@index([jlptLevel])
+}
+
+model Kanji {
+  id             String    @id @default(uuid())
+  character      String    @unique
+  onyomi         String[]
+  kunyomi        String[]
+  meaning        String
+  strokeCount    Int
+  strokeOrderSvg String?
+  jlptLevel      JlptLevel
+  mnemonic       String?
+  relatedVocab   String[]
+  srsCards       SrsCard[]
+  @@index([jlptLevel])
+}
+
+model GrammarPoint {
+  id          String    @id @default(uuid())
+  title       String
+  pattern     String
+  explanation String
+  jlptLevel   JlptLevel
+  examples    Json
+  mistakes    Json?
+  tags        String[]
+  @@index([jlptLevel])
+}
+
+model Lesson {
+  id               String       @id @default(uuid())
+  title            String
+  description      String?
+  level            JlptLevel
+  type             LessonType
+  contentJson      Json
+  orderIndex       Int
+  estimatedMinutes Int          @default(10)
+  xpReward         Int          @default(30)
+  prerequisites    String[]
+  progress         UserProgress[]
+  @@index([level, type])
+}
+
+model UserProgress {
+  id            String         @id @default(uuid())
+  userId        String
+  lessonId      String
+  status        ProgressStatus @default(NOT_STARTED)
+  score         Int?
+  timeSpentSecs Int            @default(0)
+  completedAt   DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson        Lesson         @relation(fields: [lessonId], references: [id])
+  @@unique([userId, lessonId])
+  @@index([userId])
+}
+
+model SrsCard {
+  id             String      @id @default(uuid())
+  userId         String
+  itemType       SrsItemType
+  vocabularyId   String?
+  kanjiId        String?
+  easeFactor     Float       @default(2.5)
+  intervalDays   Int         @default(1)
+  repetitions    Int         @default(0)
+  nextReviewAt   DateTime    @default(now())
+  lastReviewedAt DateTime?
+  createdAt      DateTime    @default(now())
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vocabulary     Vocabulary? @relation(fields: [vocabularyId], references: [id])
+  kanji          Kanji?      @relation(fields: [kanjiId], references: [id])
+  @@index([userId, nextReviewAt])
+}
+
+model MockTest {
+  id          String    @id @default(uuid())
+  userId      String
+  examType    JlptLevel
+  section     String
+  questions   Json
+  answers     Json
+  score       Int
+  maxScore    Int
+  timeTakenSecs Int
+  takenAt     DateTime  @default(now())
+  @@index([userId])
+}
