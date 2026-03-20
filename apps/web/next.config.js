@@ -7,9 +7,6 @@ const nextConfig = {
       { protocol: "https", hostname: "assets.nihongo.id" },
     ],
   },
-  experimental: {
-    typedRoutes: true,
-  },
 };
 
 module.exports = nextConfig;
