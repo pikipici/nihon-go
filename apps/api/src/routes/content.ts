@@ -81,7 +81,49 @@ export async function contentRoutes(app: FastifyInstance) {
       update: { status:"COMPLETED", score, timeSpentSecs: timeSpentSecs ?? 0, completedAt: new Date() },
       create: { userId: req.user.sub, lessonId: id, status:"COMPLETED", score, timeSpentSecs: timeSpentSecs ?? 0, completedAt: new Date() },
     });
-    await app.prisma.user.update({ where: { id: req.user.sub }, data: { xpTotal: { increment: lesson.xpReward } } });
+
+    // Update streak
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const user = await app.prisma.user.findUnique({
+      where: { id: req.user.sub },
+      select: { lastActivityAt: true, streakCount: true },
+    });
+
+    if (user) {
+      const lastActivity = user.lastActivityAt;
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+
+      let newStreak = user.streakCount;
+
+      if (!lastActivity) {
+        newStreak = 1;
+      } else {
+        const lastDate = new Date(lastActivity);
+        lastDate.setHours(0, 0, 0, 0);
+
+        if (lastDate.getTime() === yesterday.getTime()) {
+          // Belajar kemarin → streak naik
+          newStreak = user.streakCount + 1;
+        } else if (lastDate.getTime() < yesterday.getTime()) {
+          // Skip sehari → streak reset
+          newStreak = 1;
+        }
+        // Hari yang sama → streak tidak berubah
+      }
+
+      await app.prisma.user.update({
+        where: { id: req.user.sub },
+        data: {
+          xpTotal: { increment: lesson.xpReward },
+          streakCount: newStreak,
+          lastActivityAt: new Date(),
+        },
+      });
+    }
+
     return reply.send({ progress, xpAwarded: lesson.xpReward });
   });
 }

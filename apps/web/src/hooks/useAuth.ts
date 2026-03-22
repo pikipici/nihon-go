@@ -47,5 +47,12 @@ export function useAuth() {
     router.push("/dashboard");
   }
 
-  return { register, login, logout, fetchMe, handleOAuthCallback };
+  async function refreshUser() {
+    try {
+      const res = await api.get<{ user: any }>("/auth/me");
+      if (res.data.user) setUser(res.data.user);
+    } catch { /* ignore */ }
+  }
+
+  return { register, login, logout, fetchMe, handleOAuthCallback, refreshUser };
 }

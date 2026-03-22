@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "../../../../lib/api";
 import { Button, Spinner } from "../../../../components/ui";
+import { useAuthStore } from "../../../../store/auth.store";
 
 interface Lesson {
   id: string;
@@ -337,6 +338,7 @@ function GrammarLesson({ onComplete }: { onComplete: (score: number) => void }) 
 export default function LessonPage() {
   const { lessonId } = useParams<{ lessonId: string }>();
   const router = useRouter();
+  const setUser = useAuthStore((s) => s.setUser);
   const [lesson, setLesson] = useState<Lesson | null>(null);
   const [loading, setLoading] = useState(true);
   const [finished, setFinished] = useState(false);
@@ -358,6 +360,10 @@ export default function LessonPage() {
         { score, timeSpentSecs }
       );
       setXpEarned(res.data.xpAwarded);
+
+      // Refresh user data (XP, streak)
+      const meRes = await api.get<{ user: any }>("/auth/me");
+      if (meRes.data.user) setUser(meRes.data.user);
     } catch { /* ignore */ }
     setFinished(true);
   }
