@@ -11,18 +11,22 @@ export function useAuth() {
     setLoading(true);
     try {
       await api.post("/auth/register", data);
-      await login({ email: data.email, password: data.password });
-    } finally { setLoading(false); }
+      await login({ email: data.email, password: data.password }, "/onboarding");
+    } finally {
+      setLoading(false); 
+    }
   }
 
-  async function login(data: { email: string; password: string }) {
+  async function login(data: { email: string; password: string }, redirectTo = "/dashboard") {
     setLoading(true);
     try {
       const res = await api.post<{ accessToken: string; user: any }>("/auth/login", data);
       setAccessToken(res.data.accessToken);
       setUser(res.data.user);
-      router.push("/dashboard");
-    } finally { setLoading(false); }
+      router.push(redirectTo);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function logout() {
