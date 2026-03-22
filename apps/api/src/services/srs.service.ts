@@ -44,16 +44,19 @@ export class SrsService {
   }
 
   async addCard(userId: string, itemType: "VOCABULARY" | "KANJI", itemId: string) {
-    const data: any = { userId, itemType, nextReviewAt: new Date() };
+    const where =
+      itemType === "VOCABULARY"
+        ? { userId, itemType, vocabularyId: itemId }
+        : { userId, itemType, kanjiId: itemId };
+
+    const existing = await this.app.prisma.srsCard.findFirst({ where });
+    if (existing) return existing;
+
+    const data: Record<string, unknown> = { userId, itemType, nextReviewAt: new Date() };
     if (itemType === "VOCABULARY") data.vocabularyId = itemId;
     if (itemType === "KANJI")      data.kanjiId      = itemId;
-    return this.app.prisma.srsCard.upsert({
-      where: itemType === "VOCABULARY"
-        ? { userId_itemType_vocabularyId: { userId, itemType, vocabularyId: itemId } }
-        : { userId_itemType_kanjiId:      { userId, itemType, kanjiId: itemId } },
-      update: {},
-      create: data,
-    });
+
+    return this.app.prisma.srsCard.create({ data: data as any });
   }
 
   async getStats(userId: string) {

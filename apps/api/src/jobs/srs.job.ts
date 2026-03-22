@@ -22,16 +22,19 @@ export function createSrsWorker(redisUrl: string, app: FastifyInstance) {
     async (job) => {
       const { userId, itemType, itemIds } = job.data;
       for (const itemId of itemIds) {
-        const data: any = { userId, itemType, nextReviewAt: new Date() };
+        const where =
+          itemType === "VOCABULARY"
+            ? { userId, itemType, vocabularyId: itemId }
+            : { userId, itemType, kanjiId: itemId };
+
+        const existing = await app.prisma.srsCard.findFirst({ where });
+        if (existing) continue;
+
+        const data: Record<string, unknown> = { userId, itemType, nextReviewAt: new Date() };
         if (itemType === "VOCABULARY") data.vocabularyId = itemId;
         if (itemType === "KANJI")      data.kanjiId      = itemId;
-        await app.prisma.srsCard.upsert({
-          where: itemType === "VOCABULARY"
-            ? { userId_itemType_vocabularyId: { userId, itemType, vocabularyId: itemId } }
-            : { userId_itemType_kanjiId:      { userId, itemType, kanjiId: itemId } },
-          update: {},
-          create: data,
-        });
+
+        await app.prisma.srsCard.create({ data: data as any });
       }
       app.log.info(`SRS: added ${itemIds.length} ${itemType} cards for user ${userId}`);
     },
