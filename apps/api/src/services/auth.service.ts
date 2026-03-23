@@ -30,11 +30,35 @@ export class AuthService {
   }
 
   async loginWithGoogle(g: { id: string; email: string; name: string; picture?: string }, meta: any) {
-    const user = await this.app.prisma.user.upsert({
-      where: { googleId: g.id },
-      update: { name: g.name, avatarUrl: g.picture, email: g.email },
-      create: { googleId: g.id, email: g.email, name: g.name, avatarUrl: g.picture, emailVerified: true },
+    // Cek apakah email sudah terdaftar (register biasa)
+    const existingUser = await this.app.prisma.user.findUnique({
+      where: { email: g.email },
     });
+
+    let user;
+    if (existingUser) {
+      // Email sudah ada — update googleId dan data profil
+      user = await this.app.prisma.user.update({
+        where: { email: g.email },
+        data: {
+          googleId: g.id,
+          avatarUrl: g.picture ?? existingUser.avatarUrl,
+          emailVerified: true,
+        },
+      });
+    } else {
+      // User baru via Google
+      user = await this.app.prisma.user.create({
+        data: {
+          googleId: g.id,
+          email: g.email,
+          name: g.name,
+          avatarUrl: g.picture,
+          emailVerified: true,
+        },
+      });
+    }
+
     return this.createSession(user, meta);
   }
 
