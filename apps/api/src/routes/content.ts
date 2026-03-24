@@ -1,9 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { StreakService } from "../services/streak.service";
 
 const pageQ = z.object({ level: z.enum(["N5","N4","N3","N2","N1","JFT"]).optional(), limit: z.coerce.number().min(1).max(100).default(20), offset: z.coerce.number().default(0), search: z.string().optional(), type: z.string().optional() });
 
 export async function contentRoutes(app: FastifyInstance) {
+  const streakSvc = new StreakService(app);
+
   app.get("/vocabulary", async (req, reply) => {
     const q = pageQ.safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: "Query tidak valid" });
@@ -92,32 +95,8 @@ export async function contentRoutes(app: FastifyInstance) {
       data: { xpTotal: { increment: lesson.xpReward } },
     });
 
-    // ── 3. Update streak ───────────────────────────────────────────────────
-    const user = await app.prisma.user.findUnique({
-      where: { id: userId },
-      select: { streakCount: true, lastActivityAt: true },
-    });
-
-    if (user) {
-      const now = new Date();
-      const last = user.lastActivityAt;
-      const diffHours = last ? (now.getTime() - last.getTime()) / (1000 * 60 * 60) : 999;
-
-      let newStreak = user.streakCount;
-      if (diffHours >= 24 && diffHours < 48) {
-        // Belajar hari berikutnya — streak naik
-        newStreak = user.streakCount + 1;
-      } else if (diffHours >= 48) {
-        // Lebih dari 1 hari skip — streak reset
-        newStreak = 1;
-      }
-      // diffHours < 24 = masih hari yang sama, streak tidak berubah
-
-      await app.prisma.user.update({
-        where: { id: userId },
-        data: { streakCount: newStreak, lastActivityAt: now },
-      });
-    }
+    // ── 3. Update streak via StreakService ─────────────────────────────
+    const streakResult = await streakSvc.updateStreak(userId);
 
     // ── 4. Auto-add SRS cards ──────────────────────────────────────────────
     let srsAdded = 0;
@@ -219,7 +198,7 @@ export async function contentRoutes(app: FastifyInstance) {
       progress,
       xpAwarded: lesson.xpReward,
       srsCardsAdded: srsAdded,
-      streakUpdated: true,
+      streak: streakResult,
     });
   });
 }
