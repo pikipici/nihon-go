@@ -74,103 +74,152 @@ export async function contentRoutes(app: FastifyInstance) {
   app.post("/lessons/:id/complete", { preHandler: [app.authenticate] }, async (req, reply) => {
     const id = (req.params as any).id as string;
     const { score, timeSpentSecs } = (req.body as any) ?? {};
+    const userId = req.user.sub;
 
     const lesson = await app.prisma.lesson.findUnique({ where: { id } });
     if (!lesson) return reply.status(404).send({ error: "Tidak ditemukan" });
 
-    // Upsert progress
+    // ── 1. Update progress ─────────────────────────────────────────────────
     const progress = await app.prisma.userProgress.upsert({
-      where: { userId_lessonId: { userId: req.user.sub, lessonId: id } },
+      where: { userId_lessonId: { userId, lessonId: id } },
       update: { status: "COMPLETED", score, timeSpentSecs: timeSpentSecs ?? 0, completedAt: new Date() },
-      create: {
-        userId: req.user.sub,
-        lessonId: id,
-        status: "COMPLETED",
-        score,
-        timeSpentSecs: timeSpentSecs ?? 0,
-        completedAt: new Date(),
-      },
+      create: { userId, lessonId: id, status: "COMPLETED", score, timeSpentSecs: timeSpentSecs ?? 0, completedAt: new Date() },
     });
 
-    // Update streak
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // ── 2. Award XP ────────────────────────────────────────────────────────
+    await app.prisma.user.update({
+      where: { id: userId },
+      data: { xpTotal: { increment: lesson.xpReward } },
+    });
+
+    // ── 3. Update streak ───────────────────────────────────────────────────
     const user = await app.prisma.user.findUnique({
-      where: { id: req.user.sub },
-      select: { lastActivityAt: true, streakCount: true },
+      where: { id: userId },
+      select: { streakCount: true, lastActivityAt: true },
     });
 
-    let newStreak = user?.streakCount ?? 0;
     if (user) {
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      if (!user.lastActivityAt) {
+      const now = new Date();
+      const last = user.lastActivityAt;
+      const diffHours = last ? (now.getTime() - last.getTime()) / (1000 * 60 * 60) : 999;
+
+      let newStreak = user.streakCount;
+      if (diffHours >= 24 && diffHours < 48) {
+        // Belajar hari berikutnya — streak naik
+        newStreak = user.streakCount + 1;
+      } else if (diffHours >= 48) {
+        // Lebih dari 1 hari skip — streak reset
         newStreak = 1;
-      } else {
-        const lastDate = new Date(user.lastActivityAt);
-        lastDate.setHours(0, 0, 0, 0);
-        if (lastDate.getTime() === yesterday.getTime()) newStreak = user.streakCount + 1;
-        else if (lastDate.getTime() < yesterday.getTime()) newStreak = 1;
       }
+      // diffHours < 24 = masih hari yang sama, streak tidak berubah
+
+      await app.prisma.user.update({
+        where: { id: userId },
+        data: { streakCount: newStreak, lastActivityAt: now },
+      });
     }
 
-    // Award XP + update streak
-    await app.prisma.user.update({
-      where: { id: req.user.sub },
-      data: {
-        xpTotal: { increment: lesson.xpReward },
-        streakCount: newStreak,
-        lastActivityAt: new Date(),
-      },
-    });
+    // ── 4. Auto-add SRS cards ──────────────────────────────────────────────
+    let srsAdded = 0;
+    const content = lesson.contentJson as any;
+    const lessonType = lesson.type;
 
-    // Auto-add SRS cards
-    if (lesson.type === "VOCABULARY") {
-      const vocabs = await app.prisma.vocabulary.findMany({
-        where: { jlptLevel: lesson.level },
-        take: 10,
-        select: { id: true },
-      });
-      for (const vocab of vocabs) {
-        const existing = await app.prisma.srsCard.findFirst({
-          where: { userId: req.user.sub, itemType: "VOCABULARY", vocabularyId: vocab.id },
+    try {
+      if (lessonType === "VOCABULARY" || lessonType === "HIRAGANA" || lessonType === "KATAKANA") {
+        // Ambil vocab berdasarkan level lesson
+        const vocabList = await app.prisma.vocabulary.findMany({
+          where: { jlptLevel: lesson.level },
+          take: content?.wordCount ?? 20,
+          orderBy: { createdAt: "asc" },
         });
-        if (!existing) {
-          await app.prisma.srsCard.create({
-            data: {
-              userId: req.user.sub,
+
+        for (const vocab of vocabList) {
+          await app.prisma.srsCard.upsert({
+            where: {
+              userId_itemType_vocabularyId: {
+                userId,
+                itemType: "VOCABULARY",
+                vocabularyId: vocab.id,
+              },
+            },
+            update: {}, // sudah ada — tidak update
+            create: {
+              userId,
               itemType: "VOCABULARY",
               vocabularyId: vocab.id,
-              nextReviewAt: new Date(),
+              nextReviewAt: new Date(), // due sekarang — bisa review langsung
             },
           });
+          srsAdded++;
         }
       }
-    }
 
-    if (lesson.type === "KANJI") {
-      const kanjis = await app.prisma.kanji.findMany({
-        where: { jlptLevel: lesson.level },
-        take: 10,
-        select: { id: true },
-      });
-      for (const kanji of kanjis) {
-        const existing = await app.prisma.srsCard.findFirst({
-          where: { userId: req.user.sub, itemType: "KANJI", kanjiId: kanji.id },
-        });
-        if (!existing) {
-          await app.prisma.srsCard.create({
-            data: {
-              userId: req.user.sub,
-              itemType: "KANJI",
-              kanjiId: kanji.id,
-              nextReviewAt: new Date(),
-            },
+      if (lessonType === "KANJI") {
+        // Ambil kanji dari contentJson.kanjiList kalau ada
+        const kanjiChars: string[] = content?.kanjiList ?? [];
+
+        if (kanjiChars.length > 0) {
+          const kanjiList = await app.prisma.kanji.findMany({
+            where: { character: { in: kanjiChars } },
           });
+
+          for (const kanji of kanjiList) {
+            await app.prisma.srsCard.upsert({
+              where: {
+                userId_itemType_kanjiId: {
+                  userId,
+                  itemType: "KANJI",
+                  kanjiId: kanji.id,
+                },
+              },
+              update: {},
+              create: {
+                userId,
+                itemType: "KANJI",
+                kanjiId: kanji.id,
+                nextReviewAt: new Date(),
+              },
+            });
+            srsAdded++;
+          }
+        } else {
+          // Fallback: ambil semua kanji di level ini
+          const kanjiList = await app.prisma.kanji.findMany({
+            where: { jlptLevel: lesson.level },
+            take: 10,
+          });
+
+          for (const kanji of kanjiList) {
+            await app.prisma.srsCard.upsert({
+              where: {
+                userId_itemType_kanjiId: {
+                  userId,
+                  itemType: "KANJI",
+                  kanjiId: kanji.id,
+                },
+              },
+              update: {},
+              create: {
+                userId,
+                itemType: "KANJI",
+                kanjiId: kanji.id,
+                nextReviewAt: new Date(),
+              },
+            });
+            srsAdded++;
+          }
         }
       }
+    } catch (srsErr) {
+      // SRS error tidak boleh gagalkan lesson complete
+      app.log.warn("SRS auto-add error:", srsErr);
     }
 
-    return reply.send({ progress, xpAwarded: lesson.xpReward });
+    return reply.send({
+      progress,
+      xpAwarded: lesson.xpReward,
+      srsCardsAdded: srsAdded,
+      streakUpdated: true,
+    });
   });
 }
